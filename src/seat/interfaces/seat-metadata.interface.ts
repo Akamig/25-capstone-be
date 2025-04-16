@@ -6,7 +6,7 @@ export interface SeatPosition {
 
 export interface SeatLayout {
   name: string;
-  seats: SeatPosition[];
+  seat: SeatPosition[];
 }
 
 export interface SeatMetadata {

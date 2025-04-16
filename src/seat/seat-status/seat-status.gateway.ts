@@ -3,20 +3,30 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   SubscribeMessage,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { SeatsService } from './seats.service';
-import { SeatStatus } from './interfaces/seat-status.interface';
+import { SeatService } from '../seat.service';
 
-@WebSocketGateway()
-export class SeatStatusGateway implements OnGatewayConnection {
+@WebSocketGateway({
+  cors: {
+    origin: '*',
+  },
+})
+export class SeatStatusGateway implements OnGatewayConnection, OnGatewayInit {
   @WebSocketServer() server: Server;
 
-  constructor(private readonly seatsService: SeatsService) {}
+  constructor(private readonly seatService: SeatService) {}
+
+  afterInit(server: Server) {
+    this.seatService.getStatusUpdates().subscribe((status) => {
+      server.to('seat-updates').emit('seat-update', status);
+    });
+  }
 
   handleConnection(client: Socket) {
     // Send initial status to newly connected client
-    const initialStatus = this.seatsService.getInitialStatus();
+    const initialStatus = this.seatService.getInitialStatus();
     client.emit('initial-status', initialStatus);
   }
 
@@ -24,10 +34,5 @@ export class SeatStatusGateway implements OnGatewayConnection {
   handleRequestUpdates(client: Socket) {
     // Client can subscribe to receive updates
     client.join('seat-updates');
-  }
-
-  // Method to broadcast updates (called from service)
-  broadcastStatusUpdate(status: SeatStatus) {
-    this.server.to('seat-updates').emit('seat-update', status);
   }
 }
