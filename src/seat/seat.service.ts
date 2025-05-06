@@ -1,89 +1,152 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Subject, Observable } from 'rxjs';
-import { SeatMetadata } from './interfaces/seat-metadata.interface';
+import {
+  SeatMetadata,
+  SeatLayout,
+  SeatPosition,
+} from './interfaces/seat-metadata.interface';
 import { SeatStatus } from './interfaces/seat-status.interface';
+import { PrismaService } from '../prisma/prisma.service';
+import { Seat } from '@prisma/client';
 
 @Injectable()
-export class SeatService {
-  private seatMetadata: SeatMetadata = {
-    id: '1f',
-    name: '1F Study',
-    currentLayout: 'default_layout',
-    layouts: {
-      default_layout: {
-        name: 'Default Layout',
-        seat: [
-          { seatId: '000', x: 0, y: 0 },
-          { seatId: '001', x: 1, y: 0 },
-          { seatId: '002', x: 2, y: 0 },
-          { seatId: '003', x: 3, y: 0 },
-        ],
-      },
-    },
-  };
-
-  private seatStatuses: Map<string, SeatStatus> = new Map();
+export class SeatService implements OnModuleInit {
   private statusUpdates$ = new Subject<SeatStatus>();
-  private updateInterval: NodeJS.Timeout;
 
-  constructor() {
-    this.initializeSeatStatuses();
-    this.startSimulation();
+  constructor(private prisma: PrismaService) {}
+
+  async onModuleInit() {
+    // Check if we need to seed initial data
+    const roomCount = await this.prisma.seatRoom.count();
+
+    if (roomCount === 0) {
+      await this.seedInitialData();
+    }
   }
 
-  private initializeSeatStatuses() {
-    const defaultLayout =
-      this.seatMetadata.layouts[this.seatMetadata.currentLayout];
-    defaultLayout.seat.forEach((seat) => {
-      this.seatStatuses.set(seat.seatId, {
-        seatId: seat.seatId,
-        occupied: false,
-        lastUpdated: new Date(),
-      });
+  private async seedInitialData() {
+    const defaultRoom = await this.prisma.seatRoom.create({
+      data: {
+        name: '1F Study',
+        currentLayout: 'default_layout',
+        layouts: {
+          create: [
+            {
+              name: 'Default Layout',
+              positions: {
+                create: [
+                  { seatId: '000', x: 0, y: 0 },
+                  { seatId: '001', x: 1, y: 0 },
+                  { seatId: '002', x: 2, y: 0 },
+                  { seatId: '003', x: 3, y: 0 },
+                ],
+              },
+            },
+          ],
+        },
+        seats: {
+          create: [
+            { id: '000', occupied: false },
+            { id: '001', occupied: false },
+            { id: '002', occupied: false },
+            { id: '003', occupied: false },
+          ],
+        },
+      },
     });
+
+    console.log(`Seeded initial room: ${defaultRoom.id}`);
   }
 
-  private startSimulation() {
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
+  async getSeatMetadata(): Promise<SeatMetadata> {
+    const room = await this.prisma.seatRoom.findFirst({
+      include: {
+        layouts: {
+          include: {
+            positions: true,
+          },
+        },
+      },
+    });
+
+    if (!room) {
+      throw new Error('No seat room found');
     }
 
-    const getRandomInterval = () => Math.floor(Math.random() * 2000) + 2000; // 2-4 seconds
+    // Transform to the expected interface format
+    const layouts: { [layoutName: string]: SeatLayout } = {};
 
-    const updateRandomSeat = () => {
-      const allStatuses = this.getInitialStatus();
+    for (const layout of room.layouts) {
+      layouts[layout.name.toLowerCase().replace(' ', '_')] = {
+        name: layout.name,
+        seat: layout.positions.map((pos) => ({
+          seatId: pos.seatId,
+          x: pos.x,
+          y: pos.y,
+        })),
+      };
+    }
 
-      const randomIndex = Math.floor(Math.random() * allStatuses.length);
-      const randomSeat = allStatuses[randomIndex];
-
-      this.updateSeatStatus(randomSeat.seatId, !randomSeat.occupied);
-
-      this.updateInterval = setTimeout(updateRandomSeat, getRandomInterval());
+    return {
+      id: room.id,
+      name: room.name,
+      currentLayout: room.currentLayout,
+      layouts,
     };
-
-    this.updateInterval = setTimeout(updateRandomSeat, getRandomInterval());
   }
 
-  getSeatMetadata(): SeatMetadata {
-    return this.seatMetadata;
-  }
+  async getInitialStatus(): Promise<SeatStatus[]> {
+    const seats = await this.prisma.seat.findMany();
 
-  getInitialStatus(): SeatStatus[] {
-    return Array.from(this.seatStatuses.values());
+    return seats.map((seat) => ({
+      seatId: seat.id,
+      occupied: seat.occupied,
+      lastUpdated: seat.lastUpdated,
+    }));
   }
 
   getStatusUpdates(): Observable<SeatStatus> {
     return this.statusUpdates$.asObservable();
   }
 
-  updateSeatStatus(seatId: string, occupied: boolean): SeatStatus {
+  async updateSeatStatus(
+    seatId: string,
+    occupied: boolean,
+  ): Promise<SeatStatus> {
+    const now = new Date();
+
+    await this.prisma.seat.update({
+      where: { id: seatId },
+      data: {
+        occupied,
+        lastUpdated: now,
+      },
+    });
+
     const status: SeatStatus = {
       seatId,
       occupied,
-      lastUpdated: new Date(),
+      lastUpdated: now,
     };
-    this.seatStatuses.set(seatId, status);
+
     this.statusUpdates$.next(status); // Emit the update
     return status;
+  }
+
+  // Additional methods for managing seats
+  async createSeat(roomId: string, seatId: string): Promise<Seat> {
+    return this.prisma.seat.create({
+      data: {
+        id: seatId,
+        roomId,
+        occupied: false,
+      },
+    });
+  }
+
+  async deleteSeat(seatId: string): Promise<Seat> {
+    return this.prisma.seat.delete({
+      where: { id: seatId },
+    });
   }
 }
