@@ -1,0 +1,48 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model SeatRoom {
+  id            String         @id @default(uuid())
+  name          String
+  currentLayout String
+  layouts       SeatLayout[]
+  seats         Seat[]
+}
+
+model SeatLayout {
+  id        String    @id @default(uuid())
+  name      String
+  roomId    String
+  room      SeatRoom  @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  positions SeatPosition[]
+}
+
+model SeatPosition {
+  id        String     @id @default(uuid())
+  seatId    String
+  x         Int
+  y         Int
+  layoutId  String
+  layout    SeatLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+
+  @@unique([seatId, layoutId])
+}
+
+model Seat {
+  id         String   @id
+  roomId     String
+  room       SeatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  occupied   Boolean  @default(false)
+  lastUpdated DateTime @default(now())
+
+  @@unique([id, roomId])
+}
