@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seat Status WebSocket Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .container {
+        display: flex;
+        gap: 20px;
+      }
+
+      .panel {
+        flex: 1;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        padding: 15px;
+      }
+
+      h2 {
+        margin-top: 0;
+      }
+
+      #connection-status {
+        padding: 10px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+      }
+
+      .connected {
+        background-color: #d4edda;
+        color: #155724;
+      }
+
+      .disconnected {
+        background-color: #f8d7da;
+        color: #721c24;
+      }
+
+      .log-entry {
+        padding: 8px;
+        margin-bottom: 8px;
+        border-radius: 4px;
+        background-color: #f8f9fa;
+        border-left: 4px solid #6c757d;
+      }
+
+      .log-entry.event {
+        border-left-color: #007bff;
+      }
+
+      .log-entry.sent {
+        border-left-color: #28a745;
+      }
+
+      .log-entry.received {
+        border-left-color: #fd7e14;
+      }
+
+      .log-entry .timestamp {
+        color: #6c757d;
+        font-size: 0.8em;
+      }
+
+      .seat {
+        display: inline-block;
+        width: 50px;
+        height: 50px;
+        margin: 5px;
+        text-align: center;
+        line-height: 50px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+      }
+
+      .seat.free {
+        background-color: #d4edda;
+        border: 2px solid #28a745;
+      }
+
+      .seat.occupied {
+        background-color: #f8d7da;
+        border: 2px solid #dc3545;
+      }
+
+      button {
+        padding: 8px 12px;
+        margin: 5px 0;
+        cursor: pointer;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+      }
+
+      button:hover {
+        background-color: #0069d9;
+      }
+
+      #clear-log {
+        background-color: #6c757d;
+      }
+
+      #clear-log:hover {
+        background-color: #5a6268;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Seat Status WebSocket Test</h1>
+
+    <div id="connection-status" class="disconnected">Disconnected</div>
+
+    <div class="container">
+      <div class="panel">
+        <h2>Controls</h2>
+        <button id="connect">Connect</button>
+        <button id="disconnect">Disconnect</button>
+        <button id="subscribe">Subscribe to Updates</button>
+        <button id="get-status">Get Initial Status</button>
+
+        <h3>Seat Visualization</h3>
+        <div id="seats-container"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Event Log</h2>
+        <button id="clear-log">Clear Log</button>
+        <div id="event-log"></div>
+      </div>
+    </div>
+
+    <script>
+      // Configuration
+      const SERVER_URL = 'http://localhost:3000';
+      let socket;
+      let connected = false;
+      let seats = [];
+
+      // DOM Elements
+      const connectBtn = document.getElementById('connect');
+      const disconnectBtn = document.getElementById('disconnect');
+      const subscribeBtn = document.getElementById('subscribe');
+      const getStatusBtn = document.getElementById('get-status');
+      const clearLogBtn = document.getElementById('clear-log');
+      const connectionStatus = document.getElementById('connection-status');
+      const eventLog = document.getElementById('event-log');
+      const seatsContainer = document.getElementById('seats-container');
+
+      // Functions
+      function updateConnectionStatus(isConnected) {
+        connected = isConnected;
+        connectionStatus.className = isConnected ? 'connected' : 'disconnected';
+        connectionStatus.textContent = isConnected
+          ? 'Connected'
+          : 'Disconnected';
+        connectBtn.disabled = isConnected;
+        disconnectBtn.disabled = !isConnected;
+        subscribeBtn.disabled = !isConnected;
+        getStatusBtn.disabled = !isConnected;
+      }
+
+      function logEvent(type, message, data = null) {
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type}`;
+
+        const timestamp = document.createElement('span');
+        timestamp.className = 'timestamp';
+        timestamp.textContent = `[${new Date().toLocaleTimeString()}] `;
+
+        entry.appendChild(timestamp);
+        entry.appendChild(document.createTextNode(message));
+
+        if (data) {
+          const pre = document.createElement('pre');
+          pre.textContent = JSON.stringify(data, null, 2);
+          entry.appendChild(pre);
+        }
+
+        eventLog.prepend(entry);
+      }
+
+      function renderSeats() {
+        seatsContainer.innerHTML = '';
+
+        if (seats.length === 0) {
+          seatsContainer.textContent = 'No seats available';
+          return;
+        }
+
+        seats.forEach((seat) => {
+          const seatElement = document.createElement('div');
+          seatElement.className = `seat ${seat.occupied ? 'occupied' : 'free'}`;
+          seatElement.textContent = seat.seatId;
+          seatElement.dataset.id = seat.seatId;
+
+          seatElement.addEventListener('click', () => {
+            if (!connected) return;
+
+            const newStatus = !seat.occupied;
+
+            // Update via socket
+            socket.emit('update-seat', {
+              seatId: seat.seatId,
+              occupied: newStatus,
+            });
+
+            logEvent('sent', `Sending seat update request:`, {
+              seatId: seat.seatId,
+              occupied: newStatus,
+            });
+          });
+
+          seatsContainer.appendChild(seatElement);
+        });
+      }
+
+      function updateSeatStatus(seatId, occupied) {
+        const seatIndex = seats.findIndex((s) => s.seatId === seatId);
+        if (seatIndex !== -1) {
+          seats[seatIndex].occupied = occupied;
+          seats[seatIndex].lastUpdated = new Date();
+          renderSeats();
+        }
+      }
+
+      // Event Listeners
+      connectBtn.addEventListener('click', () => {
+        try {
+          socket = io(SERVER_URL);
+
+          socket.on('connect', () => {
+            updateConnectionStatus(true);
+            logEvent('event', 'Connected to server');
+          });
+
+          socket.on('disconnect', () => {
+            updateConnectionStatus(false);
+            logEvent('event', 'Disconnected from server');
+          });
+
+          socket.on('connect_error', (error) => {
+            updateConnectionStatus(false);
+            logEvent('event', `Connection error: ${error.message}`);
+          });
+
+          socket.on('initial-status', (data) => {
+            logEvent('received', 'Received initial status:', data);
+            seats = data;
+            renderSeats();
+          });
+
+          socket.on('seat-update', (data) => {
+            logEvent('received', 'Received seat update:', data);
+            updateSeatStatus(data.seatId, data.occupied);
+          });
+
+          socket.on('subscription-success', (data) => {
+            logEvent('received', 'Subscription successful:', data);
+          });
+
+          socket.on('error', (data) => {
+            logEvent('received', 'Error from server:', data);
+          });
+        } catch (error) {
+          logEvent('event', `Failed to connect: ${error.message}`);
+        }
+      });
+
+      disconnectBtn.addEventListener('click', () => {
+        if (socket) {
+          socket.disconnect();
+          socket = null;
+        }
+      });
+
+      subscribeBtn.addEventListener('click', () => {
+        if (!connected) return;
+
+        socket.emit('request-updates');
+        logEvent('sent', 'Requesting updates subscription');
+      });
+
+      getStatusBtn.addEventListener('click', () => {
+        if (!connected) return;
+
+        fetch(`${SERVER_URL}/seat/status`)
+          .then((response) => response.json())
+          .then((data) => {
+            logEvent('received', 'Received status from REST API:', data);
+            seats = data;
+            renderSeats();
+          })
+          .catch((error) => {
+            logEvent('event', `Error fetching status: ${error.message}`);
+          });
+      });
+
+      clearLogBtn.addEventListener('click', () => {
+        eventLog.innerHTML = '';
+      });
+
+      // Initialize
+      updateConnectionStatus(false);
+      disconnectBtn.disabled = true;
+      subscribeBtn.disabled = true;
+      getStatusBtn.disabled = true;
+    </script>
+  </body>
+</html>
