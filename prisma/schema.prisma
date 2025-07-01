@@ -20,7 +20,7 @@ model SeatLayout {
 
 model Seat {
   id       String      @id @default(uuid())
-  seatName String
+  seatName String      @unique
   seatX    Int
   seatY    Int
   layout   SeatLayout  @relation(fields: [layoutId], references: [id], onDelete: Cascade)
