@@ -10,39 +10,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model SeatRoom {
-  id            String         @id @default(uuid())
-  name          String
-  currentLayout String
-  layouts       SeatLayout[]
-  seats         Seat[]
-}
-
 model SeatLayout {
-  id        String    @id @default(uuid())
-  name      String
-  roomId    String
-  room      SeatRoom  @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  positions SeatPosition[]
-}
-
-model SeatPosition {
-  id        String     @id @default(uuid())
-  seatId    String
-  x         Int
-  y         Int
-  layoutId  String
-  layout    SeatLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
-
-  @@unique([seatId, layoutId])
+  id         String @id @default(uuid())
+  name       String
+  location   String
+  canvasSize String
+  seats      Seat[]
 }
 
 model Seat {
-  id         String   @id
-  roomId     String
-  room       SeatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  occupied   Boolean  @default(false)
-  lastUpdated DateTime @default(now())
+  id       String      @id @default(uuid())
+  seatName String
+  seatX    Int
+  seatY    Int
+  layout   SeatLayout  @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  layoutId String      @unique
+  module   SeatModule?
+}
 
-  @@unique([id, roomId])
+model SeatModule {
+  id          String   @id
+  occupied    Boolean  @default(false)
+  lastUpdated DateTime @default(now())
+  seat        Seat?    @relation(fields: [seatId], references: [id])
+  seatId      String   @unique
+}
+
+model SeatModuleStatus {
+  id           String @id
+  batteryLevel Int
+  voltage      Float
+  uptimeSec    Int
 }
