@@ -1,113 +1,164 @@
-# Seat Reservation System Implementation Guide
+# Seat Monitoring Backend
 
-## Overview
+NestJS backend for a seat monitoring and reservation system using MQTT and real-time WebSocket communication.
 
-This guide explains how to set up and run the seat reservation system with database persistence using Prisma and SQLite3, including WebSocket functionality for real-time updates.
+## Features
 
-## Setup Instructions
+- **Real-time seat monitoring** via MQTT integration with Meshtastic modules
+- **WebSocket API** for real-time frontend updates
+- **REST API** for layout and seat management
+- **Protobuf message handling** for efficient communication
+- **SQLite database** with Prisma ORM
+- **Comprehensive logging** and error handling
+- **Unit and E2E testing** with Jest
 
-### 1. Install Required Packages
+## Architecture
 
-```bash
-npm install @prisma/client @nestjs/websockets socket.io class-validator class-transformer
-npm install prisma --save-dev
+```
+[Meshtastic Modules] → [MQTT Broker] → [NestJS Backend] → [WebSocket] → [Frontend]
+                                            ↓
+                                     [SQLite Database]
 ```
 
-### 2. Initialize Prisma
+## Installation
 
 ```bash
-npx prisma init
+npm install
 ```
 
-### 3. Configure Your Project
+## Configuration
 
-1. Copy the schema.prisma file content to `prisma/schema.prisma`
-2. Create the `.env` file with the database connection string
-3. Copy all the provided files to their respective locations
+Create a `.env` file:
 
-### 4. Set Up the Database
+```env
+DATABASE_URL="file:./dev.db"
+MQTT_BROKER_URL="mqtt://localhost:1883"
+MQTT_USERNAME="your_username"
+MQTT_PASSWORD="your_password"
+MQTT_REGION="KR"
+DEFAULT_RESERVATION_MINUTES=2
+PORT=3000
+```
+
+## Database Setup
 
 ```bash
+# Generate Prisma client
 npm run prisma:generate
-npm run prisma:migrate:dev -- --name init
+
+# Push schema to database
+npm run prisma:push
+
+# (Optional) Open Prisma Studio
+npm run prisma:studio
 ```
 
-### 5. Start the Application
+## Running the Application
 
 ```bash
+# Development
 npm run start:dev
+
+# Production
+npm run start:prod
+```
+
+## API Endpoints
+
+### Layout Management
+
+- `GET /layout/init` - Get all available layouts
+- `GET /layout/seats?layoutid=<id>` - Get seats in a layout
+- `GET /layout/seat-status?layoutid=<id>` - Get current seat status
+- `POST /layout/seat-status?layoutId=<id>&seatId=<id>` - Reserve a seat temporarily
+
+### Module Management
+
+- `GET /layout/modules/unassigned` - Get modules not assigned to seats
+- `POST /layout/seats/:seatId/assign-module/:moduleId` - Assign module to seat
+- `POST /layout/modules/:moduleId/refresh` - Request status refresh
+
+## WebSocket Events
+
+### Client → Server
+
+- `subscribe-layout` - Subscribe to layout updates
+- `unsubscribe-layout` - Unsubscribe from layout
+- `ping` - Health check
+
+### Server → Client
+
+- `seat-update` - Real-time seat status changes
+- `module-status-update` - Module battery/status updates
+- `mqtt-status` - MQTT connection status
+- `layout-status` - Current layout status
+
+## MQTT Topics
+
+- `msh/{REGION}/2/e/Main/#` - Device metrics (battery, uptime)
+- `msh/{REGION}/2/e/SeatState/#` - Seat occupation status
+
+## Testing
+
+```bash
+# Unit tests
+npm run test
+
+# E2E tests
+npm run test:e2e
+
+# Test coverage
+npm run test:cov
 ```
 
 ## Project Structure
 
 ```
-├── src/
-│   ├── main.ts                      # Application entry point
-│   ├── prisma/
-│   │   ├── prisma.module.ts         # Prisma module configuration
-│   │   └── prisma.service.ts        # Prisma service for database access
-│   └── seat/
-│       ├── dtos/
-│       │   └── update-seat-status.dto.ts  # Data transfer objects
-│       ├── interfaces/
-│       │   ├── seat-metadata.interface.ts # Interfaces for seat metadata
-│       │   └── seat-status.interface.ts   # Interface for seat status
-│       ├── seat-status/
-│       │   └── seat-status.gateway.ts     # WebSocket gateway
-│       ├── seat.controller.ts       # HTTP controller for seat operations
-│       ├── seat.module.ts           # Seat module configuration
-│       └── seat.service.ts          # Service for seat operations
-├── prisma/
-│   └── schema.prisma                # Prisma schema
-└── .env                             # Environment variables
+src/
+├── layout/              # Layout and seat management
+├── mqtt/                # MQTT service and communication
+├── prisma/              # Database service
+├── protobuf/            # Protobuf encoding/decoding
+├── websocket/           # WebSocket gateway
+└── types/               # TypeScript type definitions
 ```
 
-## API Endpoints
+## Module Communication
 
-### REST Endpoints
+### Temporary Reservation Flow
 
-- `GET /seat/metadata` - Get seat metadata (layouts, positions)
-- `GET /seat/status` - Get all seat statuses
-- `POST /seat/status/:seatId` - Update seat status
-  - Body: `{ "occupied": boolean }`
+1. Frontend sends reservation request
+2. Backend sends protobuf message to module via MQTT
+3. Module sets occupied state for specified duration
+4. Module returns to original state after timeout
 
-### WebSocket Events
+### Status Refresh Flow
 
-- **Client to Server**:
+1. Backend sends refresh command to module
+2. Module responds with current status
+3. Backend updates database and notifies subscribers
 
-  - `request-updates` - Subscribe to seat updates
-  - `update-seat` - Update a seat status with payload `{ seatId: string, occupied: boolean }`
+## Error Handling
 
-- **Server to Client**:
-  - `initial-status` - Sent when a client connects, contains all seat statuses
-  - `seat-update` - Sent when a seat status changes
-  - `subscription-success` - Confirmation of subscription to updates
-  - `error` - Error message if something fails
+- Comprehensive error logging with context
+- Graceful MQTT reconnection
+- WebSocket connection management
+- Database transaction rollbacks
+- Validation of all inputs
 
-## Database Schema
+## Monitoring
 
-The database consists of four main tables:
+The application provides verbose logging for:
 
-- `SeatRoom` - Contains information about rooms with seats
-- `SeatLayout` - Defines different layouts for rooms
-- `SeatPosition` - Stores position information for seats in layouts
-- `Seat` - Stores the actual seat status (occupied/free)
+- MQTT connection status
+- Message processing
+- Database operations
+- WebSocket connections
+- API requests
 
-## Architecture Design
+## Contributing
 
-1. **Database Layer**: Prisma ORM provides type-safe database access
-2. **Service Layer**: SeatService handles business logic and data persistence
-3. **Controller Layer**: REST API endpoints for CRUD operations
-4. **WebSocket Layer**: Real-time notifications for seat status changes
-
-## Data Flow
-
-1. When a seat status changes (via REST or WebSocket):
-
-   - Data is persisted to the database via Prisma
-   - An event is emitted via RxJS Subject
-   - WebSocket gateway broadcasts the update to all subscribed clients
-
-2. When a new client connects:
-   - Initial seat statuses are sent to the client
-   - Client can subscribe to real-time updates
+1. Follow TypeScript best practices
+2. Add unit tests for new features
+3. Update documentation
+4. Use conventional commit messages
