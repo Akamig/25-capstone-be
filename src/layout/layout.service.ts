@@ -122,7 +122,7 @@ export class LayoutService {
     });
   }
 
-  async assignModuleToSeat(seatId: string, moduleId: string) {
+  async assignModuleToSeat(seatId: string, moduleId: number) {
     console.log(`🔗 Assigning module ${moduleId} to seat ${seatId}`);
 
     const seat = await this.prisma.seat.findUnique({

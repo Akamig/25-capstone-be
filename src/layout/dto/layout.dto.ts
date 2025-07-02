@@ -39,7 +39,7 @@ export class CreateSeatDto {
 
   @IsString()
   @IsNotEmpty()
-  moduleId: string;
+  moduleId: number;
 }
 
 export class ReserveSeatDto {

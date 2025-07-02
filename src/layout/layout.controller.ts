@@ -122,7 +122,7 @@ export class LayoutController {
   @HttpCode(HttpStatus.OK)
   async assignModuleToSeat(
     @Param('seatId') seatId: string,
-    @Param('moduleId') moduleId: string,
+    @Param('moduleId') moduleId: number,
   ) {
     console.log(`🌐 POST /layout/seats/${seatId}/assign-module/${moduleId}`);
     return this.layoutService.assignModuleToSeat(seatId, moduleId);

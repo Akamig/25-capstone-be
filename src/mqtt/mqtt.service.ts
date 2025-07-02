@@ -3,21 +3,50 @@ import { ConfigService } from '@nestjs/config';
 import * as mqtt from 'mqtt';
 import { Subject, BehaviorSubject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  MeshPacket,
-  SeatStatus,
-  DeviceMetrics,
-} from '../interfaces/protobuf.types';
+export interface SeatStatePayload {
+  channel: number;
+  from: number;
+  // The 'payload' can be DeviceMetrics, NodeInfo, etc., based on the 'type'.
+  payload: SeatState;
+  sender: string; // The unique ID of the module (e.g., "!7efeee00")
+  timestamp: number;
+  to: number;
+  type: string; // e.g., 'devicemetrics', 'nodeinfo'
+}
+
+// For incoming messages on the msh/../json/Main/# topic
+export interface MqttMainPayload {
+  channel: number;
+  from: number;
+  // The 'payload' can be DeviceMetrics, NodeInfo, etc., based on the 'type'.
+  payload: DeviceMetrics | any;
+  sender: string; // The unique ID of the module (e.g., "!7efeee00")
+  timestamp: number;
+  to: number;
+  type: string; // e.g., 'devicemetrics', 'nodeinfo'
+}
+
+// Defines the structure of the device metrics data
+export interface DeviceMetrics {
+  battery_level?: number;
+  voltage?: number;
+  uptime_seconds?: number;
+}
+
+export interface SeatState {
+  occupied: boolean;
+}
 
 export interface SeatStatusUpdate {
-  moduleId: string;
+  moduleId: number;
   occupied: boolean;
   timestamp: Date;
   seatId?: string;
+  layoutId?: string;
 }
 
 export interface ModuleStatusUpdate {
-  moduleId: string;
+  moduleId: number;
   batteryLevel?: number;
   voltage?: number;
   uptimeSec?: number;
@@ -40,7 +69,6 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly protobuf: ProtobufService,
   ) {
     this.region = this.configService.get('MQTT_REGION', 'KR');
     this.defaultReservationMinutes = parseInt(
@@ -100,8 +128,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private subscribeToTopics() {
-    const mainTopic = `msh/${this.region}/2/e/Main/#`;
-    const seatStateTopic = `msh/${this.region}/2/e/SeatState/#`;
+    // Switched from 'e' (protobuf) to 'json'
+    const mainTopic = `msh/${this.region}/2/json/Main/#`;
+    const seatStateTopic = `msh/${this.region}/2/json/SeatState/#`;
 
     this.client.subscribe([mainTopic, seatStateTopic], (error) => {
       if (error) {
@@ -115,55 +144,32 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private async handleMessage(topic: string, message: Buffer) {
     try {
       console.log(`📨 Received message on topic: ${topic}`);
-
-      const meshPacket = this.protobuf.decodeMeshPacket(message);
-      if (!meshPacket) {
-        console.warn('⚠️ Failed to decode MeshPacket');
-        return;
-      }
-
-      const moduleId = meshPacket.from.toString();
-      console.log(`🔧 Processing message from module: ${moduleId}`);
+      const data = JSON.parse(message.toString());
 
       // Handle SeatState channel
-      if (topic.includes('/SeatState/')) {
-        await this.handleSeatStatusMessage(moduleId, meshPacket);
+      if (topic.includes('/json/SeatState/')) {
+        await this.handleSeatStatusMessage(data);
       }
 
-      // Handle Main channel (DeviceMetrics)
-      if (topic.includes('/Main/')) {
-        await this.handleDeviceMetricsMessage(moduleId, meshPacket);
+      // Handle Main channel (DeviceMetrics, NodeInfo, etc.)
+      if (topic.includes('/json/Main/')) {
+        await this.handleMainChannelMessage(data);
       }
     } catch (error) {
-      console.error('❌ Error handling MQTT message:', error);
+      console.error('❌ Error handling JSON MQTT message:', error);
     }
   }
 
-  private async handleSeatStatusMessage(
-    moduleId: string,
-    meshPacket: MeshPacket,
-  ) {
-    if (!meshPacket.decoded?.payload) {
-      console.warn('⚠️ No payload in seat status message');
-      return;
-    }
-
-    const seatStatus = this.protobuf.decodeSeatStatus(
-      meshPacket.decoded.payload,
-    );
-    if (!seatStatus) {
-      console.warn('⚠️ Failed to decode seat status');
-      return;
-    }
-
-    const occupied = seatStatus.isOccupied ?? false;
+  private async handleSeatStatusMessage(payload: SeatStatePayload) {
+    const moduleId = payload.from;
+    const occupied = payload.payload.occupied ?? false;
     const timestamp = new Date();
 
     console.log(
       `🪑 Seat status update - Module: ${moduleId}, Occupied: ${occupied}`,
     );
 
-    // Update or create seat module
+    // Update or create seat module in the database
     const seatModule = await this.prisma.seatModule.upsert({
       where: { id: moduleId },
       update: {
@@ -180,52 +186,43 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    // Emit seat status update
+    // Emit seat status update to other services
     this.seatStatusSubject.next({
       moduleId,
       occupied,
       timestamp,
       seatId: seatModule.seat?.id,
+      layoutId: seatModule.seat?.layoutId,
     });
   }
 
-  private async handleDeviceMetricsMessage(
-    moduleId: string,
-    meshPacket: MeshPacket,
-  ) {
-    if (!meshPacket.decoded?.payload) {
-      console.warn('⚠️ No payload in device metrics message');
+  private async handleMainChannelMessage(data: MqttMainPayload) {
+    const moduleId = data.from;
+    if (!moduleId) {
+      console.warn('⚠️ No sender (moduleId) in Main channel message');
       return;
     }
 
-    const deviceMetrics = this.protobuf.decodeDeviceMetrics(
-      meshPacket.decoded.payload,
+    console.log(
+      `📊 Main channel message from module: ${moduleId}, Type: ${data.type}`,
     );
-    if (!deviceMetrics) {
-      console.warn('⚠️ Failed to decode device metrics');
-      return;
-    }
 
-    const timestamp = new Date();
+    // We only care about device metrics for status updates, based on original logic
+    // This could be expanded to handle 'nodeinfo' or other types
+    if (data.payload) {
+      const deviceMetrics: DeviceMetrics = data.payload;
+      const timestamp = new Date();
 
-    console.log(`📊 Device metrics update - Module: ${moduleId}`);
-
-    // Update or create seat module status
-    if (
-      deviceMetrics.battery_level !== undefined ||
-      deviceMetrics.voltage !== undefined ||
-      deviceMetrics.uptime_seconds !== undefined
-    ) {
       await this.prisma.seatModuleStatus.upsert({
-        where: { id: moduleId },
+        where: { id: moduleId.toString() },
         update: {
-          batteryLevel: deviceMetrics.battery_level ?? 0,
-          voltage: deviceMetrics.voltage ?? 0,
-          uptimeSec: deviceMetrics.uptime_seconds ?? 0,
+          batteryLevel: deviceMetrics.battery_level,
+          voltage: deviceMetrics.voltage,
+          uptimeSec: deviceMetrics.uptime_seconds,
           lastSeen: timestamp,
         },
         create: {
-          id: moduleId,
+          id: moduleId.toString(),
           batteryLevel: deviceMetrics.battery_level ?? 0,
           voltage: deviceMetrics.voltage ?? 0,
           uptimeSec: deviceMetrics.uptime_seconds ?? 0,
@@ -233,7 +230,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      // Emit module status update
+      // Emit module status update to other services
       this.moduleStatusSubject.next({
         moduleId,
         batteryLevel: deviceMetrics.battery_level,
@@ -245,7 +242,6 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private setupEventListeners() {
-    // Listen for seat status updates and handle database operations
     this.seatStatusUpdates$.subscribe(async (update) => {
       console.log(`🪑 Processing seat status update:`, update);
       // Additional processing can be added here
@@ -258,51 +254,28 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   async sendTemporaryReservation(
-    moduleId: string,
+    moduleId: number,
     minutes?: number,
   ): Promise<boolean> {
     try {
       const reservationMinutes = minutes ?? this.defaultReservationMinutes;
-
       console.log(
         `🔒 Sending temporary reservation to module ${moduleId} for ${reservationMinutes} minutes`,
       );
 
-      // Create seat status message for temporary reservation
-      const seatStatus: SeatStatus = {
-        isOccupied: true,
-      };
-
-      const seatStatusBuffer = this.protobuf.encodeSeatStatus(seatStatus);
-
-      // Create mesh packet
-      const meshPacket: Partial<MeshPacket> = {
-        from: 0, // Gateway node
-        to: parseInt(moduleId),
-        channel: 0,
-        decoded: {
-          portnum: 1, // Custom port for seat commands
-          payload: seatStatusBuffer,
-          want_response: false,
-          dest: parseInt(moduleId),
-          source: 0,
-          request_id: 0,
-          reply_id: 0,
-          emoji: 0,
+      // Construct the JSON command payload
+      const command = {
+        to: moduleId, // Target the specific module
+        payload: {
+          occupied: true, // Command to set the seat as occupied
         },
-        want_ack: true,
-        priority: 70, // RELIABLE
-        hop_limit: 3,
-        hop_start: 3,
-        via_mqtt: true,
-        pki_encrypted: false,
       };
 
-      const meshPacketBuffer = this.protobuf.encodeMeshPacket(meshPacket);
-      const topic = `msh/${this.region}/2/e/SeatState/!gateway`;
+      const topic = `msh/${this.region}/2/json/SeatState/!gateway`;
+      const payload = JSON.stringify(command);
 
       return new Promise((resolve) => {
-        this.client.publish(topic, meshPacketBuffer, (error) => {
+        this.client.publish(topic, payload, (error) => {
           if (error) {
             console.error('❌ Failed to send temporary reservation:', error);
             resolve(false);
@@ -322,37 +295,21 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     try {
       console.log(`🔄 Requesting status refresh from module ${moduleId}`);
 
-      // Create refresh command (empty seat status to trigger refresh)
-      const seatStatus: SeatStatus = {};
-      const seatStatusBuffer = this.protobuf.encodeSeatStatus(seatStatus);
-
-      const meshPacket: Partial<MeshPacket> = {
-        from: 0,
+      // Construct the JSON command payload to request a status update
+      const command = {
         to: parseInt(moduleId),
-        channel: 0,
-        decoded: {
-          portnum: 2, // Custom port for refresh commands
-          payload: seatStatusBuffer,
-          want_response: true,
-          dest: parseInt(moduleId),
-          source: 0,
-          request_id: Date.now(),
-          reply_id: 0,
-          emoji: 0,
+        want_response: true,
+        // The payload could be empty or contain a specific request flag
+        payload: {
+          request_status: true,
         },
-        want_ack: true,
-        priority: 70,
-        hop_limit: 3,
-        hop_start: 3,
-        via_mqtt: true,
-        pki_encrypted: false,
       };
 
-      const meshPacketBuffer = this.protobuf.encodeMeshPacket(meshPacket);
-      const topic = `msh/${this.region}/2/e/SeatState/!gateway`;
+      const topic = `msh/${this.region}/2/json/Main/!gateway`; // Refresh is usually a main channel function
+      const payload = JSON.stringify(command);
 
       return new Promise((resolve) => {
-        this.client.publish(topic, meshPacketBuffer, (error) => {
+        this.client.publish(topic, payload, (error) => {
           if (error) {
             console.error('❌ Failed to request status refresh:', error);
             resolve(false);

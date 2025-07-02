@@ -191,24 +191,11 @@ export class SeatStatusGateway
 
   private async broadcastSeatUpdate(update: SeatStatusUpdate) {
     if (!update.seatId) return;
+    if (!update.layoutId) return;
 
     try {
-      // Find which layout this seat belongs to
-      const seat = await this.layoutService.getLayoutSeats(update.seatId);
-      if (!seat) return;
-
-      // Get the layout ID - we need to find the seat first
-      const allLayouts = await this.layoutService.getAllLayouts();
-      let targetLayoutId: string | null = null;
-
-      for (const layout of allLayouts) {
-        if (layout.seats.some((s) => s.id === update.seatId)) {
-          targetLayoutId = layout.id;
-          break;
-        }
-      }
-
-      if (!targetLayoutId) return;
+      const targetLayoutId = update.layoutId;
+      console.log();
 
       const subscribers = this.layoutSubscriptions.get(targetLayoutId);
       if (!subscribers || subscribers.size === 0) return;
